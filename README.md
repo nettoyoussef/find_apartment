@@ -27,7 +27,7 @@ filtro="#area-desde=60&preco-ate=2400&preco-desde=1000&preco-total=sim&vagas=1&o
 After running a successful query, generating the database and creating the map, you should find a file named "apartments_map.html" on your main project directory.
 By opening such a file, you will find a map like:
 
-[Basic Map](/plot_example.png)
+![Basic Map](/plot_example.png)
 
 
 ## Dependencies
