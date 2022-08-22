@@ -1,16 +1,19 @@
-import re
+from decouple import config
+from ipyleaflet import AwesomeIcon, Map, Marker
+from ipywidgets import HTML
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-import ipyleaflet
-from ipywidgets import HTML
-from ipyleaflet import AwesomeIcon, Map, Marker
-import numpy as np
-
+from selenium.webdriver.support.ui import WebDriverWait
 from time import sleep
 import bs4
+import datetime
 import folium
+import googlemaps
+import ipyleaflet
+import numpy as np
+import pandas as pd
+import re
 
 
 def find_clean_entry(link, entry):
@@ -47,44 +50,43 @@ def apartment_parser(link):
 
 def get_results(bairro, filtro):
     main_site = "https://www.vivareal.com.br/aluguel/sp/campinas/"
-    button_next_page = '//a[@class="js-change-page" and @title="Próxima página"]'
+    button_next_page = '//button[@class="js-change-page" and @title="Próxima página"]'
     url = main_site + bairro + "/" + filtro
     browser = webdriver.Firefox()
     browser.get(url)
     sleep(3)
-    html = browser.page_source
-    soup = bs4.BeautifulSoup(html, "html.parser")
-    paginas = soup.find_all(attrs={"pagination__item"})
-    print(paginas)
-    print(type(paginas))
-    print(len(paginas))
-    next_page = paginas[-1].find_all("a")[0].get("href")
     aps_list = []
-    links = soup.find_all(attrs={"property-card__container"})
-    for entry in links:
-        aps_list.append(apartment_parser(entry))
-    while next_page != "#pagina=":
+    next_page = False
+    count = 1
+    # extra timer for page to load
+    sleep(1)
+    while not next_page:
+        print("Scrapping page: " + str(count))
         # next_page = re.sub("#", "?", next_page)
         # url = main_site + bairro + "/" + next_page + filtro
         # print(url)
         # browser.get(url)
         # browser.find_element(By.XPATH, button_next_page).click()
+        # find button for next page to be loaded
+        # extra timer for page to load
+        sleep(2)
+        # browser.find_element(By.XPATH, button_next_page).click()
+        # element.click()
+        # scrap housing info
+        html = browser.page_source
+        soup = bs4.BeautifulSoup(html, "html.parser")
+        links = soup.find_all(attrs={"property-card__container"})
+        for entry in links:
+            aps_list.append(apartment_parser(entry))
+        # check next page
+        paginas = soup.find_all(attrs={"pagination__item"})
+        next_page = paginas[-1].find("button").has_attr("data-disabled")
+        # click on next page
         element = WebDriverWait(browser, 20).until(
             EC.element_to_be_clickable((By.XPATH, button_next_page))
         )
         browser.execute_script("arguments[0].click();", element)
-        # sleep(1)
-        # browser.find_element(By.XPATH, button_next_page).click()
-        # element.click()
-        sleep(3)
-        html = browser.page_source
-        soup = bs4.BeautifulSoup(html, "html.parser")
-        paginas = soup.find_all(attrs={"pagination__item"})
-        next_page = paginas[-1].find_all("a")[0].get("href")
-        print(next_page)
-        links = soup.find_all(attrs={"property-card__container"})
-        for entry in links:
-            aps_list.append(apartment_parser(entry))
+        count = count + 1
     browser.close()
     return aps_list
 
@@ -147,7 +149,7 @@ class Apartment:
         """
 
 
-def create_map(apartments):
+def create_map(apartments, filename):
     cps_coords = [-22.8923728, -47.2079813]
     map_ = folium.Map(location=cps_coords, zoom_start=10)
 
@@ -181,7 +183,7 @@ def create_map(apartments):
         addApartment(map_, entry)
 
     # save map
-    map_.save("map.html")
+    map_.save(filename)
 
 
 def create_map_ipyleaflet(apartments):
@@ -219,3 +221,129 @@ def create_map_ipyleaflet(apartments):
 
     # save map
     map_.save("map.html")
+
+
+def scrape_properties(bairro, filtro, engine):
+    new_property = get_results(bairro, filtro)
+    new_property = pd.DataFrame(new_property)
+    new_property = new_property.sort_values(by=["endereco"], axis=0)
+
+    # filter results already in the db
+    with engine.connect() as conn:
+        apartment_links = pd.read_sql(
+            "select link, endereco, lat, lon from apartments", conn
+        )
+    type(apartment_links)
+    len(apartment_links)
+
+    key = new_property.link.isin(apartment_links.link)
+    new_property = new_property.loc[~key, :]
+
+    # add lat/lon of known addresses
+    unique_adresses = apartment_links.loc[
+        :, ["endereco", "lat", "lon"]
+    ].drop_duplicates()
+    new_property = pd.merge(new_property, unique_adresses, how="left", on="endereco")
+    # checks
+    print(new_property.shape)
+    print(new_property.info())
+
+    # Address
+    # Geocoding an address
+    key = new_property.lat.isna()
+    search_addresses = new_property.loc[key, ["endereco"]].drop_duplicates()
+
+    # checks
+    print("Address shape: ")
+    print(search_addresses.shape)
+    print("How many addresses are already on the database: ")
+    print(search_addresses.endereco.isin(apartment_links.endereco).describe())
+
+    # Uses google geocoding API
+    gmaps = googlemaps.Client(key=config("google_key"))
+
+    geocode_entries = {}
+    dt_geocode = []
+    for i, entry in search_addresses.iterrows():
+        print("Buscando endereco: {}".format(i))
+        endereco = entry["endereco"]
+        geocode_result = gmaps.geocode(endereco)
+        geocode_entries[i] = {"query": endereco, "result": geocode_result}
+        dt_geocode.append(
+            {
+                "endereco": endereco,
+                "lat": geocode_result[0].get("geometry").get("location").get("lat"),
+                "lon": geocode_result[0].get("geometry").get("location").get("lng"),
+            }
+        )
+        sleep(0.05)
+
+    dt_geocode = pd.DataFrame(dt_geocode)
+    # checks
+    print("Google Maps geocoding info: ")
+    print(dt_geocode.info())
+
+    new_property = (
+        pd.merge(new_property, dt_geocode, how="left", on=["endereco"])
+        .assign(
+            lat_x=lambda x: x.lat_x.fillna(x["lat_y"]),
+            lon_x=lambda x: x.lon_x.fillna(x["lon_y"]),
+        )
+        .rename(columns={"lat_x": "lat", "lon_x": "lon"})
+        .drop(["lat_y", "lon_y"], axis=1)
+    )
+
+    # add datetime and status
+    new_property = new_property.assign(date=datetime.datetime.now(), status="new")
+    print("Final dataset head: ")
+    new_property.head()
+    print("Final dataset info: ")
+    new_property.info()
+
+    # change all previous status to old
+    print("Updating dataset...")
+    engine.connect().execute("UPDATE apartments SET status = 'old';")
+
+    # Save results on sqlite db
+    print("Saving new results...")
+    with engine.connect() as conn:
+        new_property.to_sql("apartments", conn, if_exists="append", index=False)
+
+
+def gen_map(engine, filename):
+    # get results from sqlite db
+    with engine.connect() as conn:
+        apartments = pd.read_sql("select * from apartments where status ='new'", conn)
+
+    # apartments = temp
+    apartments = apartments.assign(
+        cluster=lambda x: x.groupby("endereco").ngroup(),
+        entries_by_cluster=lambda x: x.loc[:, ["status", "endereco"]]
+        .groupby("endereco")
+        .transform("count"),
+        lat=lambda x: randomize_location(x, "lat"),
+        lon=lambda x: randomize_location(x, "lon"),
+        preco_tot=lambda x: (
+            (
+                x.aluguel.str.replace("[^0-9]", "")
+                .replace("", "0")
+                .replace(np.nan, "0")
+                .astype("float64")
+            )
+            + (
+                x.cond.str.replace("[^0-9]", "")
+                .replace("", "0")
+                .replace(np.nan, "0")
+                .astype("float64")
+            )
+        ),
+    )
+    print("Map dataset shape: ")
+    apartments.shape
+    print("Map dataset info: ")
+    apartments.info()
+
+    apartments = [Apartment(**entry.to_dict()) for _, entry in apartments.iterrows()]
+
+    # Map
+    create_map(apartments, filename)
