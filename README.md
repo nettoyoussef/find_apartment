@@ -1,6 +1,6 @@
 ## Purpose 
 
-This is a basic scrapper that get results from the [https://www.vivareal.com.br/](VivaReal's website), one of the main Brazilian portals for property's rental and sales.
+This is a basic scrapper that get results from the [VivaReal's website](https://www.vivareal.com.br/), one of the main Brazilian portals for property's rental and sales.
 Sadly, the portal doesn't provide any way to search apartments through maps, such as other competitors. 
 
 This project aims to correct this deficiency, by scrapping all properties supplied through a filter using Selenium, sending address results to the Google Maps API to get geolocation coordinates, and finally, generate a map using Folium/ipyleaflet.
@@ -21,6 +21,14 @@ bairro="/apartamento_residencial/"
 # by running search on the VivaReal's website
 filtro="#area-desde=60&preco-ate=2400&preco-desde=1000&preco-total=sim&vagas=1&ordenar-por=preco-total:ASC"
 ```
+
+## An Example
+
+After running a successful query, generating the database and creating the map, you should find a file named "apartments_map.html" on your main project directory.
+By opening such a file, you will find a map like:
+
+[Basic Map](https://github.com/nettoyoussef/find_apartment/plot_example.png)
+
 
 ## Dependencies
 
